@@ -1,26 +1,10 @@
-/*
-[리포트]
-HTTP 트래픽이 탐지되는 경우 차단 메세지를 inject하라.
-[1단계 - forward fin]
-HTTP 트래픽("GET "로 시작하는)이 탐지되는 경우 같은 방향(forward)으로 서버에게 "blocked" 메세지를 보낸다. NetClient, NetServer로 테스트하면 쉽게 디버깅할 수 있음.
-[2단계 - bacward fin]
-HTTP 트래픽("GET "로 시작하는)이 탐지되는 경우 같은 반대 방향(backward)으로 클라이언트에게 "blocked" 메세지를 보낸다. NetClient, NetServer로 테스트하면 쉽게 디버깅할 수 있음.
-[3단계 - change block message]
-"blocked"를 302 redirect message(https://en.wikipedia.org/wiki/HTTP_302)로 대체하여 victim(웹브라우저)에서 해당 웹페이지로 redirect되는지 확인한다.
-[프로그램 실행 형식]
-http_inject
-
-*/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <pcap.h>
 #include <strings.h>
 
 #define ETHHDR_TYPE_IPv4 0x0800
-
 #define IPHDR_PROTOCOL_TCP 0x06
-
 #define INJECT_PACKET_BUFSIZE 128
 
 typedef struct {
@@ -75,7 +59,7 @@ typedef struct {
 
 int GetIPHdrChksum (IPHDR * piphdr) {	//Get IP Header Checksum..
 	unsigned int		checksum = 0;
-	unsigned short *	pshortdata = piphdr;
+	unsigned short *	pshortdata = piphdr;	// 2byte header data
 	int i = 0;
 
 	for (i = 0; i < (piphdr->HdrLength * 4)/2; i++) {
@@ -119,18 +103,15 @@ int ForwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 	IPHDR * 		piphdr;
 	TCPHDR *		ptcphdr;	
 	char *			ptcpdata;
-	unsigned char 	injectpacket[INJECT_PACKET_BUFSIZE] = {0, };
+	unsigned char 	injectpacket[INJECT_PACKET_BUFSIZE] = {0, };	// packet to be transferred for blocking.
 	char 			msg[] = "blocked";
 	PTCPHDR 		pseudohdr;
 	int i = 0;
 
 
 	memcpy((char *)injectpacket, (char *)packet, hsize);
-
 	pethhdr = (ETHHDR *)injectpacket;
-
 	piphdr = (unsigned char *)pethhdr + sizeof(ETHHDR);
-	
 	piphdr->Checksum = 0;
 
 	ptcphdr = (unsigned char *)piphdr + (int)(piphdr->HdrLength * 4);
@@ -181,9 +162,9 @@ int BackwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 	IPHDR * 		piphdr;
 	TCPHDR *		ptcphdr;	
 	char *			ptcpdata;
-	unsigned char 	injectpacket[INJECT_PACKET_BUFSIZE] = {0, };
+	unsigned char 	injectpacket[INJECT_PACKET_BUFSIZE] = {0, };	
 	char 			msg[] = "blocked";
-	PTCPHDR 		pseudohdr;
+	PTCPHDR 		pseudohdr;										//Pseudo Header for calculating tcp checksum
 	int i = 0;
 
 	unsigned char  	tempmac[6];
@@ -192,15 +173,12 @@ int BackwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 
     unsigned int 	tempnum;
 
-    /* exchange src and dest */
-	
+    /* exchange src information and dest information */
 
 	memcpy((char *)injectpacket, (char *)packet, hsize);
 
 	pethhdr = (ETHHDR *)injectpacket;
-
 	piphdr = (unsigned char *)pethhdr + sizeof(ETHHDR);
-	
 	piphdr->Checksum = 0;
 
 	ptcphdr = (unsigned char *)piphdr + (int)(piphdr->HdrLength * 4);
@@ -230,9 +208,6 @@ int BackwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 	tempnum = ptcphdr->AckNum;
 	ptcphdr->AckNum = htonl(ntohl(ptcphdr->SeqNum) + ntohs(piphdr->Length) - ((unsigned long)piphdr->HdrLength * 4 + (unsigned long)ptcphdr->HdrLength * 4));
 	ptcphdr->SeqNum = tempnum;
-
-
-
 
 	// Manipulate Total Length in IP header with msg "blocked"
 	piphdr->Length = htons((unsigned short)(piphdr->HdrLength * 4) + (unsigned short)(ptcphdr->HdrLength * 4) + sizeof(msg));
@@ -351,33 +326,15 @@ int main (int argc, char * argv[]) {
 		if (piphdr->Protocol != IPHDR_PROTOCOL_TCP)
 			continue;
 		 
-
 		ptcphdr = (unsigned char *)piphdr + (int)(piphdr->HdrLength * 4);
 		phttp 	= (unsigned char *)ptcphdr + (int)(ptcphdr->HdrLength * 4);
 		hsize = sizeof(ETHHDR) + (piphdr->HdrLength * 4) + (ptcphdr->HdrLength * 4);
 		
 		if (!memcmp((char *)phttp, "GET", 3)) {
-
-			//ForwardInject(pcd, packet, hsize);
-			BackwardInject(pcd, packet, hsize);
+			//ForwardInject(pcd, packet, hsize);	// If activate this function, Blocking will be done by forward FIN method
+			BackwardInject(pcd, packet, hsize);		// If activate this function, Blocking will be done by backward FIN method
 		}
 	}
 
 	return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
