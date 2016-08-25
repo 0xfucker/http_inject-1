@@ -73,11 +73,6 @@ typedef struct {
 } PTCPHDR;
 
 
-int BackwardInject () {
-
-	return 0;
-}
-
 int GetIPHdrChksum (IPHDR * piphdr) {
 	unsigned int		checksum = 0;
 	unsigned short *	pshortdata = piphdr;
@@ -144,13 +139,11 @@ int ForwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 	ptcphdr->Checksum = 0;	
 
 	// Get Seq Num
-	printf("ntohs iphdr Length : %d\n", ntohs(piphdr->Length));
 	ptcphdr->SeqNum = htonl(ntohl(ptcphdr->SeqNum) + ntohs(piphdr->Length) - ((unsigned long)piphdr->HdrLength * 4 + (unsigned long)ptcphdr->HdrLength * 4));
 
 
 	// Manipulate Total Length in IP header with msg "blocked"
 	piphdr->Length = htons((unsigned short)(piphdr->HdrLength * 4) + (unsigned short)(ptcphdr->HdrLength * 4) + sizeof(msg));
-	printf("Length : %d\n", sizeof(msg));
 	memcpy(ptcpdata, msg, 8);
 	
 	// Set Fin Flag
@@ -180,6 +173,104 @@ int ForwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 
 	return 0;
 }
+
+int BackwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
+
+	ETHHDR * 		pethhdr;
+	IPHDR * 		piphdr;
+	TCPHDR *		ptcphdr;	
+	char *			ptcpdata;
+	unsigned char 	injectpacket[INJECT_PACKET_BUFSIZE] = {0, };
+	char 			msg[] = "blocked";
+	PTCPHDR 		pseudohdr;
+	int i = 0;
+
+	unsigned char  	tempmac[6];
+    unsigned int 	tempipaddr;
+    unsigned short 	temptcpport;
+
+    unsigned int 	tempnum;
+
+    /* exchange src and dest */
+	
+
+	memcpy((char *)injectpacket, (char *)packet, hsize);
+
+	pethhdr = (ETHHDR *)injectpacket;
+
+	piphdr = (unsigned char *)pethhdr + sizeof(ETHHDR);
+	
+	piphdr->Checksum = 0;
+
+	ptcphdr = (unsigned char *)piphdr + (int)(piphdr->HdrLength * 4);
+	ptcpdata = (unsigned char *)ptcphdr + (int)(ptcphdr->HdrLength * 4);
+	
+	ptcphdr->Checksum = 0;	
+
+
+
+	// change mac address
+	memcpy(tempmac, pethhdr->DstAddr, 6);
+	memcpy(pethhdr->DstAddr, pethhdr->SrcAddr, 6);
+	memcpy(pethhdr->SrcAddr, tempmac, 6);
+	
+	// change ip address
+	//printf("srcip : %x dstip : %x\n", piphdr->SrcAddr, piphdr->DstAddr);
+	tempipaddr = piphdr->SrcAddr;
+	piphdr->SrcAddr = piphdr->DstAddr;
+	piphdr->DstAddr = tempipaddr;
+	//printf("srcip : %x dstip : %x\n", piphdr->SrcAddr, piphdr->DstAddr);
+	// change port
+
+	temptcpport = ptcphdr->SrcPort;
+	ptcphdr->SrcPort = ptcphdr->DstPort;
+	ptcphdr->DstPort = temptcpport;
+
+	// Get Seq, ACK Num
+
+	tempnum = ptcphdr->AckNum;
+	ptcphdr->AckNum = htonl(ntohl(ptcphdr->SeqNum) + ntohs(piphdr->Length) - ((unsigned long)piphdr->HdrLength * 4 + (unsigned long)ptcphdr->HdrLength * 4));
+	ptcphdr->SeqNum = tempnum;
+
+
+
+
+	// Manipulate Total Length in IP header with msg "blocked"
+	piphdr->Length = htons((unsigned short)(piphdr->HdrLength * 4) + (unsigned short)(ptcphdr->HdrLength * 4) + sizeof(msg));
+	//printf("Length : %d\n", sizeof(msg));
+	memcpy(ptcpdata, msg, 8);
+	
+	// Set Fin Flag
+	ptcphdr->Fin = 1;
+	
+	// Get Checksum of IP Header
+	GetIPHdrChksum(piphdr);
+	
+	ptcphdr->Checksum = 0;
+
+	pseudohdr.SrcAddr = piphdr->SrcAddr;
+	pseudohdr.DstAddr = piphdr->DstAddr;
+	pseudohdr.Reserved = 0x00;
+	pseudohdr.Protocol = IPHDR_PROTOCOL_TCP;
+
+
+	pseudohdr.TCPSegLength = ptcphdr->HdrLength * 4 + sizeof(msg);
+	pseudohdr.TCPSegLength = htons(pseudohdr.TCPSegLength);
+
+	memcpy((char *)(&pseudohdr.TCP), (char *)ptcphdr, ptcphdr->HdrLength * 4);
+	memcpy((char *)pseudohdr.TCP + ptcphdr->HdrLength * 4, ptcpdata, sizeof(msg));
+
+
+	GetTCPHdrChksum(ptcphdr, &pseudohdr);
+
+	pcap_sendpacket(pcd, injectpacket, sizeof(ETHHDR) + piphdr->HdrLength * 4 + ptcphdr->HdrLength * 4 + sizeof(msg));
+
+
+
+	return 0;
+}
+
+
 
 int PrintPacket(const unsigned char * packet, int len) {
 	int i = 0;
@@ -228,7 +319,7 @@ int main (int argc, char * argv[]) {
 	
 	printf("Device : %s\n", dev);	
 	
-	pcd = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+	pcd = pcap_open_live(dev, BUFSIZ, 1, 1, errbuf);
 	
 	if (pcd == NULL) {
 		fprintf(stderr, "Cannot open device(%s) : %s\n", dev, errbuf);
@@ -279,12 +370,13 @@ int main (int argc, char * argv[]) {
 		hsize = sizeof(ETHHDR) + (piphdr->HdrLength * 4) + (ptcphdr->HdrLength * 4);
 		
 		if (!memcmp((char *)phttp, "GET", 3)) {
-			printf("headerlen : %d\n", header.len);
-			printf("hsize : %d\n", hsize);
+			//printf("headerlen : %d\n", header.len);
+			//printf("hsize : %d\n", hsize);
 			ForwardInject(pcd, packet, hsize);
+			//BackwardInject(pcd, packet, hsize);
 		}
 
-		//PrintPacket(packet, header.len);
+		//PrintPacket(packet,	 header.len);
 
 	}
 
