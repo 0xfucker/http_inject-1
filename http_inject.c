@@ -73,7 +73,7 @@ typedef struct {
 } PTCPHDR;
 
 
-int GetIPHdrChksum (IPHDR * piphdr) {
+int GetIPHdrChksum (IPHDR * piphdr) {	//Get IP Header Checksum..
 	unsigned int		checksum = 0;
 	unsigned short *	pshortdata = piphdr;
 	int i = 0;
@@ -171,6 +171,7 @@ int ForwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 
 	pcap_sendpacket(pcd, injectpacket, sizeof(ETHHDR) + piphdr->HdrLength * 4 + ptcphdr->HdrLength * 4 + sizeof(msg));
 
+	printf("[HTTP BLOCKED]\n");
 	return 0;
 }
 
@@ -207,8 +208,6 @@ int BackwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 	
 	ptcphdr->Checksum = 0;	
 
-
-
 	// change mac address
 	memcpy(tempmac, pethhdr->DstAddr, 6);
 	memcpy(pethhdr->DstAddr, pethhdr->SrcAddr, 6);
@@ -237,6 +236,7 @@ int BackwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 
 	// Manipulate Total Length in IP header with msg "blocked"
 	piphdr->Length = htons((unsigned short)(piphdr->HdrLength * 4) + (unsigned short)(ptcphdr->HdrLength * 4) + sizeof(msg));
+	
 	//printf("Length : %d\n", sizeof(msg));
 	memcpy(ptcpdata, msg, 8);
 	
@@ -262,15 +262,11 @@ int BackwardInject (pcap_t * pcd, const u_char * packet, int hsize) {
 
 
 	GetTCPHdrChksum(ptcphdr, &pseudohdr);
-
 	pcap_sendpacket(pcd, injectpacket, sizeof(ETHHDR) + piphdr->HdrLength * 4 + ptcphdr->HdrLength * 4 + sizeof(msg));
-
-
-
+	
+	printf("[HTTP BLOCKED]\n");
 	return 0;
 }
-
-
 
 int PrintPacket(const unsigned char * packet, int len) {
 	int i = 0;
@@ -297,11 +293,11 @@ int main (int argc, char * argv[]) {
 	const u_char * 	packet;
 	struct 			pcap_pkthdr header;
 	struct 			bpf_program fp;
-	ETHHDR * 		pethhdr;
-	IPHDR * 		piphdr;
-	TCPHDR *		ptcphdr;
-	unsigned char * phttp;
-	int 			hsize;
+	ETHHDR * 		pethhdr;	// pointer of Ethernet Header
+	IPHDR * 		piphdr;		// pointer of IP Header
+	TCPHDR *		ptcphdr;	// pointer of TCP Header
+	unsigned char * phttp;		// pointer of http Header
+	int 			hsize;		// Whole size of packet
 
 	if (argc > 1) {
 		dev = argv[1];		
@@ -338,8 +334,6 @@ int main (int argc, char * argv[]) {
 	}
 	
 	printf("Data-link Layer check completed...(type : Ethernet)\n");	
-
-
 	
 	while(1) {
 		packet 	= pcap_next(pcd, &header);
@@ -352,46 +346,25 @@ int main (int argc, char * argv[]) {
 		if (ntohs(pethhdr->type) != ETHHDR_TYPE_IPv4)
 			continue;
 		
-		//printf("IPv4 Header\n");
 		piphdr = (unsigned char *)pethhdr + sizeof(ETHHDR);
 
-		//printf("Protocol : %02X\n", piphdr->Protocol);
 		if (piphdr->Protocol != IPHDR_PROTOCOL_TCP)
 			continue;
 		 
 
 		ptcphdr = (unsigned char *)piphdr + (int)(piphdr->HdrLength * 4);
-		//printf("ip HDRlen : %d tcp HDRlen : %d\n", piphdr->HdrLength, ptcphdr->HdrLength);
 		phttp 	= (unsigned char *)ptcphdr + (int)(ptcphdr->HdrLength * 4);
-
-		//printf("%p, %p\n", ptcphdr, phttp);
-
-		//printf("%c %c\n", ((unsigned char *)phttp)[0], ((unsigned char *)phttp)[1]);
 		hsize = sizeof(ETHHDR) + (piphdr->HdrLength * 4) + (ptcphdr->HdrLength * 4);
 		
 		if (!memcmp((char *)phttp, "GET", 3)) {
-			//printf("headerlen : %d\n", header.len);
-			//printf("hsize : %d\n", hsize);
-			ForwardInject(pcd, packet, hsize);
-			//BackwardInject(pcd, packet, hsize);
+
+			//ForwardInject(pcd, packet, hsize);
+			BackwardInject(pcd, packet, hsize);
 		}
-
-		//PrintPacket(packet,	 header.len);
-
 	}
 
 	return 0;
 }
-
-
-
-
-
-
-
-
-
-
 
 
 
